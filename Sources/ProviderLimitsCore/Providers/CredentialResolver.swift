@@ -80,19 +80,30 @@ public struct CredentialResolver: Sendable {
     private let clock: @Sendable () -> Date
     private let access: @Sendable (URL) -> Bool
     private let readFile: @Sendable (URL) throws -> Data
+    private let readClaudeKeychain: @Sendable () -> Data?
 
     public init(
         home: URL = FileManager.default.homeDirectoryForCurrentUser,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         clock: @escaping @Sendable () -> Date = { Date() },
         access: @escaping @Sendable (URL) -> Bool = { _ in true },
-        readFile: @escaping @Sendable (URL) throws -> Data = { try Data(contentsOf: $0) }
+        readFile: @escaping @Sendable (URL) throws -> Data = { try Data(contentsOf: $0) },
+        readClaudeKeychain: (@Sendable () -> Data?)? = nil
     ) {
         self.home = home
         self.environment = environment
         self.clock = clock
         self.access = access
         self.readFile = readFile
+        // The Keychain belongs to the real user, so a resolver on a custom home never touches it.
+        let isUserHome = home.standardizedFileURL == FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
+        if let readClaudeKeychain {
+            self.readClaudeKeychain = readClaudeKeychain
+        } else if isUserHome {
+            self.readClaudeKeychain = { ClaudeKeychain.read() }
+        } else {
+            self.readClaudeKeychain = { nil }
+        }
     }
 
     public func discover(provider: ProviderType) async -> CredentialDiscovery {
@@ -181,10 +192,11 @@ public struct CredentialResolver: Sendable {
         let relativePath = isCodex ? ".codex/auth.json" : ".claude/.credentials.json"
         let label = isCodex ? "Codex" : "Claude"
         let url = home.appendingPathComponent(relativePath)
+        var location = "~/" + relativePath
         func result(_ status: CredentialSourceStatus) -> CredentialSourceRead {
             CredentialSourceRead(
                 descriptor: CredentialSourceDescriptor(
-                    id: sourceID, label: label, location: "~/" + relativePath, status: status, accounts: []
+                    id: sourceID, label: label, location: location, status: status, accounts: []
                 ), candidates: []
             )
         }
@@ -194,8 +206,14 @@ public struct CredentialResolver: Sendable {
             data = try readFile(url)
         } catch {
             let error = error as NSError
-            return result(error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError
-                ? .missing : .unreadable)
+            let fileMissing = error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError
+            // Claude Code on macOS keeps the same JSON in the Keychain instead of this file.
+            if fileMissing, !isCodex, let keychainData = readClaudeKeychain() {
+                data = keychainData
+                location = ClaudeKeychain.location
+            } else {
+                return result(fileMissing ? .missing : .unreadable)
+            }
         }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return result(.unsupportedFormat)
@@ -226,7 +244,7 @@ public struct CredentialResolver: Sendable {
             expiresAt = CredentialParsing.number(expiry).map { $0 / 1000 }
         }
         return singleCredential(
-            sourceID: sourceID, label: label, location: "~/" + relativePath,
+            sourceID: sourceID, label: label, location: location,
             payload: payload, accountID: accountID, expiresAt: expiresAt, now: now
         )
     }
@@ -305,6 +323,26 @@ public struct CredentialResolver: Sendable {
         )
     }
 }
+
+enum ClaudeKeychain {
+    static let service = "Claude Code-credentials"
+    static let location = "Keychain: \(service)"
+
+    /// Read-only lookup through /usr/bin/security, which Claude Code's item already trusts.
+    static func read() -> Data? {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        process.arguments = ["find-generic-password", "-s", service, "-w"]
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return nil }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return process.terminationStatus == 0 && !data.isEmpty ? data : nil
+    }
+}
+
 enum CredentialParsing {
     static func nonempty(_ value: Any?) -> String? {
         guard let string = value as? String else { return nil }

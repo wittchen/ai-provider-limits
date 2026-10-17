@@ -35,6 +35,10 @@ fi
 cp "${ROOT_DIR}/App/Resources/MenuBarIcon.png" "${ROOT_DIR}/App/Resources/MenuBarIcon@2x.png" "${RESOURCES_DIR}/"
 cp "${ROOT_DIR}/LICENSE" "${ROOT_DIR}/NOTICE" "${RESOURCES_DIR}/"
 
+# SwiftPM 6.4+ (swiftbuild layout) emits one prelinked object and the module next to the products.
+CORE_OBJECTS=("${BUILD_DIR}"/ProviderLimitsCore.build/*.o)
+[[ -e "${CORE_OBJECTS[0]}" ]] || CORE_OBJECTS=("${BUILD_DIR}/ProviderLimitsCore.o")
+
 echo "Compiling App Binary..."
 swiftc \
     -swift-version 6 \
@@ -42,7 +46,8 @@ swiftc \
     -parse-as-library \
     -target "${ARCH}-apple-macosx14.0" \
     -I "${BUILD_DIR}/Modules" \
-    "${BUILD_DIR}"/ProviderLimitsCore.build/*.o \
+    -I "${BUILD_DIR}" \
+    "${CORE_OBJECTS[@]}" \
     App/MenuBarHostApp.swift \
     App/MenuBarContentView.swift \
     App/SettingsView.swift \

@@ -74,7 +74,7 @@ final class MenuBarState {
         showAntigravity = defaults.object(forKey: "showAntigravity") as? Bool ?? true
         showCodex = defaults.object(forKey: "showCodex") as? Bool ?? true
         showCursor = defaults.object(forKey: "showCursor") as? Bool ?? true
-        showClaude = defaults.object(forKey: "showClaude") as? Bool ?? false
+        showClaude = defaults.object(forKey: "showClaude") as? Bool ?? true
         showOpenRouter = defaults.object(forKey: "showOpenRouter") as? Bool ?? false
         snapshots = [:]
 

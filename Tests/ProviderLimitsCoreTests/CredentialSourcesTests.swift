@@ -27,6 +27,41 @@ struct CredentialSourcesTests {
         }
     }
 
+    @Test("Claude falls back to the Keychain entry when the credentials file is missing")
+    func claudeFallsBackToKeychainWhenFileMissing() async throws {
+        try await withTemporaryHome { home in
+            let expiresMs = Int64(fixedClockDate.timeIntervalSince1970 * 1000) + 3_600_000
+            let keychainJSON = try JSONSerialization.data(withJSONObject: [
+                "claudeAiOauth": ["accessToken": "keychain-token", "expiresAt": expiresMs, "subscriptionType": "max"]
+            ])
+            let resolver = CredentialResolver(
+                home: home, environment: [:], clock: { self.fixedClockDate },
+                readClaudeKeychain: { keychainJSON }
+            )
+            let resolution = await resolver.resolve(provider: .claude)
+
+            let native = try #require(resolution.discovery.sources.first { $0.id == "native.claude-credentials" })
+            #expect(native.status == .availableLocally)
+            #expect(native.location == "Keychain: Claude Code-credentials")
+            let candidate = try #require(resolution.candidates.first)
+            guard case let .claude(credentials) = candidate.payload else {
+                Issue.record("Expected Claude payload")
+                return
+            }
+            #expect(credentials.accessToken == "keychain-token")
+            #expect(credentials.subscriptionType == "max")
+
+            // An existing file still wins over the Keychain.
+            try writeClaudeCredentials(home: home, token: "file-token")
+            let fileResolution = await resolver.resolve(provider: .claude)
+            guard case let .claude(fileCredentials)? = fileResolution.candidates.first?.payload else {
+                Issue.record("Expected Claude payload from file")
+                return
+            }
+            #expect(fileCredentials.accessToken == "file-token")
+        }
+    }
+
     @Test("Unreadable sources handle denied access and throwing reader")
     func unreadableSourcesHandleDeniedAccessAndThrowingReader() async throws {
         try await withTemporaryHome { home in
