@@ -22,6 +22,7 @@ Supported providers:
 - **Direct Usage & Dashboard Links**: Click the link icon next to any provider header to jump straight to its web usage or spending dashboard.
 - **100% Private & Local**: Communicates directly from your Mac to official provider endpoints. No middleman servers, analytics, or third-party telemetry.
 - **Native macOS Menu Bar App**: Click to inspect live SwiftUI usage cards with percentage remaining, countdown timers, and expiration badges. Right-click for Settings… and Quit.
+- **Live Gauges in the Menu Bar**: Without clicking, every account shows a double ring (outer: weekly or 30-day window, inner: 5-hour window, full ring = nothing used) plus both reset countdowns, refreshed every 5 minutes. Claude logins use Claude orange, Team plans green, Codex the menu bar text colour; hover for percentages.
 - **Subscription Renewal & Plan Badges**: Formatted plan names in headers (e.g. ChatGPT Pro, Claude Pro, Google AI Pro) and color-coded badges (`till MMM d`) highlighting days remaining until billing cycle renewal.
 - **Standalone Settings**: A native Providers/About sidebar window preserves provider visibility and order, follows system appearance, and includes feedback, creator links, and voluntary support.
 - **CLI Terminal Preview**: Inspect limits in any terminal using Unicode progress bars.

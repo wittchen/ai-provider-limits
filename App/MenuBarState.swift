@@ -222,6 +222,35 @@ final class MenuBarState {
         }
     }
 
+    /// Active cards in menu order: one per visible provider plus the extra Claude accounts.
+    var visibleCards: [ProviderUsageSnapshot] {
+        providerOrder.flatMap { provider -> [ProviderUsageSnapshot] in
+            guard isShown(provider), let snapshot = snapshots[provider] else { return [] }
+            return ([snapshot] + (provider == .claude ? additionalClaudeSnapshots : [])).filter(\.isActive)
+        }
+    }
+
+    /// "Max 72%  Team 100%  Codex 82%": the tightest remaining limit of every visible card (status item tooltip).
+    var statusTitle: String {
+        visibleCards.compactMap { snapshot in
+            guard let remaining = snapshot.metrics.map(\.remainingPercentage).min() else { return nil }
+            let name = snapshot.provider == .claude
+                ? snapshot.planName.replacingOccurrences(of: "Claude ", with: "")
+                : snapshot.provider.displayName.components(separatedBy: " ").last ?? snapshot.provider.displayName
+            return "\(name) \(Int(max(0, remaining).rounded()))%"
+        }.joined(separator: "  ")
+    }
+
+    private func isShown(_ provider: ProviderType) -> Bool {
+        switch provider {
+        case .antigravity: return showAntigravity
+        case .codex: return showCodex
+        case .cursor: return showCursor
+        case .claude: return showClaude
+        case .openRouter: return showOpenRouter
+        }
+    }
+
     func refreshAdditionalClaudeAccounts() async {
         additionalClaudeSnapshots = await engine.additionalAccountSnapshots(for: .claude)
     }

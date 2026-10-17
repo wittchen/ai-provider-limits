@@ -187,6 +187,26 @@ struct ProviderLimitsCoreTests {
         #expect(snapshot.metrics[1].remainingPercentage == 45.0)
     }
 
+    @Test("Codex parser labels the free plan's 30-day window by its length, not as weekly")
+    func testCodexFreePlanMonthlyWindow() throws {
+        let json: [String: Any] = [
+            "plan_type": "free",
+            "rate_limit": [
+                "primary_window": [
+                    "used_percent": 0,
+                    "limit_window_seconds": 2_592_000,
+                    "reset_after_seconds": 2_592_000,
+                    "reset_at": 1_794_819_684
+                ]
+            ]
+        ]
+
+        let snapshot = try CodexProvider().parseUsagePayload(json: json)
+
+        #expect(snapshot.metrics.map(\.id) == ["codex_monthly"])
+        #expect(snapshot.metrics.first?.label == "GPT Models · 30-Day Limit")
+    }
+
     @Test("Codex parser maps primary window to 5-hour and secondary to weekly")
     func testCodexRateLimitWindows() throws {
         let json: [String: Any] = [

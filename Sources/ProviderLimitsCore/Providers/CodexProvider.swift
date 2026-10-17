@@ -182,9 +182,12 @@ public struct CodexProvider: CredentialUsageClient, Sendable {
 
         if isFiveHour {
             return ("codex_5hour", "GPT Models · 5-Hour Limit")
-        } else {
-            return ("codex_weekly", "GPT Models · Weekly Limit")
         }
+        // The free plan has a single 30-day window; only call windows up to ~a week "weekly".
+        if let windowSeconds, windowSeconds > 8 * 86_400 {
+            return ("codex_monthly", "GPT Models · \(Int((windowSeconds / 86_400).rounded()))-Day Limit")
+        }
+        return ("codex_weekly", "GPT Models · Weekly Limit")
     }
 
     private func parseWindowResetDate(_ window: [String: Any]) -> Date? {

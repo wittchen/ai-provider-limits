@@ -86,6 +86,8 @@ public struct LimitMetric: Codable, Identifiable, Sendable {
             return "Grok"
         } else if lower.contains("weekly") || lower.contains("7-day") || lower.contains("week") {
             return "Weekly"
+        } else if lower.contains("30-day") {
+            return "30-Day"
         } else if lower.contains("claude") {
             return "Claude"
         } else if lower.contains("cursor") {
@@ -107,7 +109,7 @@ public struct LimitMetric: Codable, Identifiable, Sendable {
 
     public var displayRank: Int {
         if id.contains("sonnet") { return 1 }
-        if id.contains("weekly") || id.contains("seven_day") { return 0 }
+        if id.contains("weekly") || id.contains("seven_day") || id.contains("monthly") { return 0 }
         if id.contains("5hour") { return 2 }
         return 3
     }
