@@ -16,7 +16,9 @@ public final class AppGroupStore: Sendable {
             directory = customDirectoryURL
         } else if let appGroupURL = FileManager.default.containerURL(
             forSecurityApplicationGroupIdentifier: Self.appGroupID
-        ) {
+        ),
+            // Without the app-group entitlement (ad-hoc builds) macOS returns the path but denies creating it.
+            (try? FileManager.default.createDirectory(at: appGroupURL, withIntermediateDirectories: true)) != nil {
             directory = appGroupURL
         } else {
             let baseDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
