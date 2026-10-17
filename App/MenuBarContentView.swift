@@ -6,6 +6,7 @@ import AppKit
 
 public struct MenuBarContentView: View {
     public let snapshots: [ProviderType: ProviderUsageSnapshot]
+    public let additionalClaudeSnapshots: [ProviderUsageSnapshot]
     public let isRefreshing: Bool
     public let onRefresh: () -> Void
     public let providerOrder: [ProviderType]
@@ -17,6 +18,7 @@ public struct MenuBarContentView: View {
     public let onOpenSettings: () -> Void
     public init(
         snapshots: [ProviderType: ProviderUsageSnapshot],
+        additionalClaudeSnapshots: [ProviderUsageSnapshot] = [],
         isRefreshing: Bool,
         providerOrder: [ProviderType],
         showAntigravity: Bool,
@@ -28,6 +30,7 @@ public struct MenuBarContentView: View {
         onRefresh: @escaping () -> Void
     ) {
         self.snapshots = snapshots
+        self.additionalClaudeSnapshots = additionalClaudeSnapshots
         self.isRefreshing = isRefreshing
         self.onRefresh = onRefresh
         self.providerOrder = providerOrder
@@ -62,7 +65,8 @@ public struct MenuBarContentView: View {
                     }
                     .frame(maxWidth: .infinity, minHeight: 140)
                 } else {
-                    ForEach(visibleSnapshots, id: \.id) { snapshot in
+                    // Position as identity: extra accounts share their provider's snapshot id.
+                    ForEach(Array(visibleSnapshots.enumerated()), id: \.offset) { _, snapshot in
                         ProviderWidgetView(snapshot: snapshot, size: .medium, isCard: true)
                             .accessibilityIdentifier("provider-card-\(snapshot.provider.rawValue)")
                     }
@@ -95,10 +99,11 @@ public struct MenuBarContentView: View {
     }
 
     private var visibleSnapshots: [ProviderUsageSnapshot] {
-        providerOrder.compactMap { provider in
-            guard isProviderEnabled(provider) else { return nil }
+        providerOrder.flatMap { provider -> [ProviderUsageSnapshot] in
+            guard isProviderEnabled(provider) else { return [] }
             let snapshot = snapshots[provider] ?? ProviderUsageSnapshot.empty(for: provider)
-            return snapshot.isActive ? snapshot : nil
+            let extras = provider == .claude ? additionalClaudeSnapshots : []
+            return ([snapshot] + extras).filter(\.isActive)
         }
     }
 

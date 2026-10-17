@@ -169,6 +169,7 @@ final class MenuBarController: NSObject, NSApplicationDelegate, NSPopoverDelegat
         if !snapshots.isEmpty {
             state.applyRefreshAll(results: snapshots, capturedEpochs: capturedEpochs)
         }
+        await state.refreshAdditionalClaudeAccounts()
     }
 
     private static func menuBarIcon() -> NSImage {

@@ -52,6 +52,7 @@ final class MenuBarState {
     }
 
     var snapshots: [ProviderType: ProviderUsageSnapshot]
+    var additionalClaudeSnapshots: [ProviderUsageSnapshot] = []
     var isRefreshing = false
 
     var selections: [ProviderType: CredentialSelection] = [:]
@@ -221,6 +222,10 @@ final class MenuBarState {
         }
     }
 
+    func refreshAdditionalClaudeAccounts() async {
+        additionalClaudeSnapshots = await engine.additionalAccountSnapshots(for: .claude)
+    }
+
     func captureEpochs() -> [ProviderType: UInt64] {
         var copy: [ProviderType: UInt64] = [:]
         for provider in ProviderType.allCases {
@@ -239,6 +244,7 @@ struct MenuBarPanelRoot: View {
     var body: some View {
         MenuBarContentView(
             snapshots: state.snapshots,
+            additionalClaudeSnapshots: state.additionalClaudeSnapshots,
             isRefreshing: state.isRefreshing,
             providerOrder: state.providerOrder,
             showAntigravity: state.showAntigravity,

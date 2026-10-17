@@ -27,29 +27,42 @@ struct CredentialSourcesTests {
         }
     }
 
-    @Test("Claude falls back to the Keychain entry when the credentials file is missing")
+    @Test("Claude falls back to every Keychain login when the credentials file is missing")
     func claudeFallsBackToKeychainWhenFileMissing() async throws {
         try await withTemporaryHome { home in
-            let expiresMs = Int64(fixedClockDate.timeIntervalSince1970 * 1000) + 3_600_000
-            let keychainJSON = try JSONSerialization.data(withJSONObject: [
-                "claudeAiOauth": ["accessToken": "keychain-token", "expiresAt": expiresMs, "subscriptionType": "max"]
-            ])
+            let nowMs = Int64(fixedClockDate.timeIntervalSince1970 * 1000)
+            func login(_ token: String, _ plan: String, expiresMs: Int64) throws -> Data {
+                try JSONSerialization.data(withJSONObject: [
+                    "claudeAiOauth": ["accessToken": token, "expiresAt": expiresMs, "subscriptionType": plan]
+                ])
+            }
+            let entries = [
+                ClaudeKeychain.Entry(service: "Claude Code-credentials", label: "me@private.invalid",
+                                     data: try login("private-token", "max", expiresMs: nowMs + 3_600_000)),
+                ClaudeKeychain.Entry(service: "Claude Code-credentials-7b31a414", label: "me@team.invalid",
+                                     data: try login("team-token", "team", expiresMs: nowMs + 3_600_000)),
+                ClaudeKeychain.Entry(service: "Claude Code-credentials-0000dead", label: nil,
+                                     data: try login("old-token", "pro", expiresMs: nowMs - 1))
+            ]
             let resolver = CredentialResolver(
                 home: home, environment: [:], clock: { self.fixedClockDate },
-                readClaudeKeychain: { keychainJSON }
+                readClaudeKeychain: { entries }
             )
             let resolution = await resolver.resolve(provider: .claude)
 
             let native = try #require(resolution.discovery.sources.first { $0.id == "native.claude-credentials" })
             #expect(native.status == .availableLocally)
-            #expect(native.location == "Keychain: Claude Code-credentials")
-            let candidate = try #require(resolution.candidates.first)
-            guard case let .claude(credentials) = candidate.payload else {
-                Issue.record("Expected Claude payload")
-                return
+            #expect(native.location == "Keychain: Claude Code-credentials*")
+            #expect(native.accounts.map(\.label) == ["me@private.invalid", "me@team.invalid", "Claude Code-credentials-0000dead"])
+            #expect(native.accounts.map(\.status) == [.availableLocally, .availableLocally, .expired])
+
+            let nativeCandidates = resolution.candidates.filter { $0.sourceID == "native.claude-credentials" }
+            #expect(nativeCandidates.map { $0.reference?.accountID } == ["Claude Code-credentials", "Claude Code-credentials-7b31a414"])
+            let tokens = nativeCandidates.compactMap { candidate -> String? in
+                guard case let .claude(credentials) = candidate.payload else { return nil }
+                return credentials.accessToken
             }
-            #expect(credentials.accessToken == "keychain-token")
-            #expect(credentials.subscriptionType == "max")
+            #expect(tokens == ["private-token", "team-token"])
 
             // An existing file still wins over the Keychain.
             try writeClaudeCredentials(home: home, token: "file-token")

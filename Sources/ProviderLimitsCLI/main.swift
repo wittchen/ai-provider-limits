@@ -6,15 +6,20 @@ struct ProviderLimitsCLI {
     static func main() async {
         let engine = SyncEngine()
         let snapshots = await engine.refreshAll()
+        let additionalClaude = await engine.additionalAccountSnapshots(for: .claude)
+        let cards = ProviderType.allCases.flatMap { provider in
+            [snapshots[provider] ?? ProviderUsageSnapshot.empty(for: provider)] + (provider == .claude ? additionalClaude : [])
+        }
 
         print("\n╔════════════════════════════════════════════════════════════════════════╗")
         print("║                       AI PROVIDER LIMITS PREVIEW                       ║")
         print("╚════════════════════════════════════════════════════════════════════════╝\n")
 
-        for provider in ProviderType.allCases {
-            let snapshot = snapshots[provider] ?? ProviderUsageSnapshot.empty(for: provider)
+        for snapshot in cards {
+            let provider = snapshot.provider
+            let account = snapshot.provenance?.accountLabel.map { " · \($0)" } ?? ""
             print("┌────────────────────────────────────────────────────────────────────────┐")
-            let header = "│ [\(provider.systemIconName)] \(provider.displayName)"
+            let header = "│ [\(provider.systemIconName)] \(provider.displayName)\(account)"
             let planBadge = "[\(snapshot.planName)] │"
             let paddingCount = max(1, 74 - header.count - planBadge.count)
             print("\(header)\(String(repeating: " ", count: paddingCount))\(planBadge)")

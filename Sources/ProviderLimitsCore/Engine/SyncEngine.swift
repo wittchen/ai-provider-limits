@@ -418,4 +418,25 @@ public actor SyncEngine {
         }
         return verifiedResults
     }
+
+    /// Live (or cached) snapshots for every further account of `provider` beside the one its main card shows.
+    // shortcut: no cooldown or generation tracking here; add it if extra accounts start hitting rate limits.
+    public func additionalAccountSnapshots(for provider: ProviderType) async -> [ProviderUsageSnapshot] {
+        guard let client = clients[provider] as? CredentialUsageClient else { return [] }
+        let resolution = await client.credentialResolver.resolve(provider: provider, selection: .automatic)
+        let shownReference = currentSnapshotsByProvider[provider]?.provenance?.reference
+        var snapshots: [ProviderUsageSnapshot] = []
+        for candidate in resolution.candidates {
+            guard let reference = candidate.reference, reference != shownReference,
+                  !snapshots.contains(where: { $0.provenance?.reference == reference }) else { continue }
+            let single = CredentialResolution(discovery: resolution.discovery, candidates: [candidate])
+            if let live = try? await client.fetchResolvedUsage(resolution: single), live.isActive {
+                try? store.saveSnapshot(live)
+                snapshots.append(live)
+            } else if let cached = matchingCachedSnapshot(for: candidate, provider: provider) {
+                snapshots.append(cached)
+            }
+        }
+        return snapshots
+    }
 }

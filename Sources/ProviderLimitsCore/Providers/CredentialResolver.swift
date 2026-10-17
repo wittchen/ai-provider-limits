@@ -1,4 +1,6 @@
+import CryptoKit
 import Foundation
+import Security
 #if canImport(SQLite3)
 import SQLite3
 #endif
@@ -80,7 +82,7 @@ public struct CredentialResolver: Sendable {
     private let clock: @Sendable () -> Date
     private let access: @Sendable (URL) -> Bool
     private let readFile: @Sendable (URL) throws -> Data
-    private let readClaudeKeychain: @Sendable () -> Data?
+    private let readClaudeKeychain: @Sendable () -> [ClaudeKeychain.Entry]
 
     public init(
         home: URL = FileManager.default.homeDirectoryForCurrentUser,
@@ -88,7 +90,7 @@ public struct CredentialResolver: Sendable {
         clock: @escaping @Sendable () -> Date = { Date() },
         access: @escaping @Sendable (URL) -> Bool = { _ in true },
         readFile: @escaping @Sendable (URL) throws -> Data = { try Data(contentsOf: $0) },
-        readClaudeKeychain: (@Sendable () -> Data?)? = nil
+        readClaudeKeychain: (@Sendable () -> [ClaudeKeychain.Entry])? = nil
     ) {
         self.home = home
         self.environment = environment
@@ -100,9 +102,9 @@ public struct CredentialResolver: Sendable {
         if let readClaudeKeychain {
             self.readClaudeKeychain = readClaudeKeychain
         } else if isUserHome {
-            self.readClaudeKeychain = { ClaudeKeychain.read() }
+            self.readClaudeKeychain = { ClaudeKeychain.entries(home: home) }
         } else {
-            self.readClaudeKeychain = { nil }
+            self.readClaudeKeychain = { [] }
         }
     }
 
@@ -192,11 +194,10 @@ public struct CredentialResolver: Sendable {
         let relativePath = isCodex ? ".codex/auth.json" : ".claude/.credentials.json"
         let label = isCodex ? "Codex" : "Claude"
         let url = home.appendingPathComponent(relativePath)
-        var location = "~/" + relativePath
         func result(_ status: CredentialSourceStatus) -> CredentialSourceRead {
             CredentialSourceRead(
                 descriptor: CredentialSourceDescriptor(
-                    id: sourceID, label: label, location: location, status: status, accounts: []
+                    id: sourceID, label: label, location: "~/" + relativePath, status: status, accounts: []
                 ), candidates: []
             )
         }
@@ -208,12 +209,11 @@ public struct CredentialResolver: Sendable {
             let error = error as NSError
             let fileMissing = error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError
             // Claude Code on macOS keeps the same JSON in the Keychain instead of this file.
-            if fileMissing, !isCodex, let keychainData = readClaudeKeychain() {
-                data = keychainData
-                location = ClaudeKeychain.location
-            } else {
-                return result(fileMissing ? .missing : .unreadable)
+            if fileMissing, !isCodex {
+                let entries = readClaudeKeychain()
+                if !entries.isEmpty { return readClaudeKeychainSource(entries, sourceID: sourceID, now: now) }
             }
+            return result(fileMissing ? .missing : .unreadable)
         }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return result(.unsupportedFormat)
@@ -244,8 +244,41 @@ public struct CredentialResolver: Sendable {
             expiresAt = CredentialParsing.number(expiry).map { $0 / 1000 }
         }
         return singleCredential(
-            sourceID: sourceID, label: label, location: location,
+            sourceID: sourceID, label: label, location: "~/" + relativePath,
             payload: payload, accountID: accountID, expiresAt: expiresAt, now: now
+        )
+    }
+
+    /// One account per Keychain login, so every Claude Code profile gets its own reference, cache and card.
+    private func readClaudeKeychainSource(
+        _ entries: [ClaudeKeychain.Entry], sourceID: String, now: Date
+    ) -> CredentialSourceRead {
+        var accounts: [CredentialAccountDescriptor] = []
+        var candidates: [CredentialCandidate] = []
+        for entry in entries {
+            guard let json = try? JSONSerialization.jsonObject(with: entry.data) as? [String: Any],
+                  let credentials = CredentialParsing.parseClaudeCredentials(json: json),
+                  let token = CredentialParsing.nonempty(credentials.accessToken) else { continue }
+            let expiry = (json["claudeAiOauth"] as? [String: Any])?["expiresAt"]
+            let expiresAt = CredentialParsing.number(expiry).map { $0 / 1000 }
+            let expired = expiresAt.map { $0 <= now.timeIntervalSince1970 } == true
+            let reference = CredentialReference(sourceID: sourceID, accountID: entry.service)
+            accounts.append(CredentialAccountDescriptor(
+                reference: reference, label: entry.label ?? entry.service, status: expired ? .expired : .availableLocally
+            ))
+            guard !expired else { continue }
+            candidates.append(CredentialCandidate(
+                sourceID: sourceID, reference: reference,
+                payload: .claude(ClaudeCredentials(accessToken: token, subscriptionType: credentials.subscriptionType)),
+                expiresAt: expiresAt
+            ))
+        }
+        let status: CredentialSourceStatus = !candidates.isEmpty ? .availableLocally
+            : accounts.isEmpty ? .unsupportedFormat : .expired
+        return CredentialSourceRead(
+            descriptor: CredentialSourceDescriptor(
+                id: sourceID, label: "Claude", location: ClaudeKeychain.location, status: status, accounts: accounts
+            ), candidates: candidates
         )
     }
 
@@ -324,12 +357,66 @@ public struct CredentialResolver: Sendable {
     }
 }
 
-enum ClaudeKeychain {
+public enum ClaudeKeychain {
+    public struct Entry: Sendable {
+        public let service: String
+        public let label: String?
+        public let data: Data
+
+        public init(service: String, label: String?, data: Data) {
+            self.service = service
+            self.label = label
+            self.data = data
+        }
+    }
+
     static let service = "Claude Code-credentials"
-    static let location = "Keychain: \(service)"
+    static let location = "Keychain: \(service)*"
+
+    /// Claude Code names the item for ~/.claude "Claude Code-credentials" and, for a CLAUDE_CONFIG_DIR login,
+    /// appends "-" plus the first 8 hex chars of SHA-256 over that directory's path.
+    static func entries(home: URL) -> [Entry] {
+        let configDirs = ((try? FileManager.default.contentsOfDirectory(atPath: home.path)) ?? [])
+            .filter { $0.hasPrefix(".claude") }
+            .map { home.appendingPathComponent($0) }
+        return services().compactMap { name in
+            guard let data = read(service: name) else { return nil }
+            let profile = name == service
+                ? home.appendingPathComponent(".claude.json")
+                : configDirs.first { "\(service)-\(pathHash($0.path))" == name }?.appendingPathComponent(".claude.json")
+            return Entry(service: name, label: profile.flatMap(accountEmail), data: data)
+        }
+    }
+
+    /// Attribute-only listing, which never asks for the secret.
+    private static func services() -> [String] {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+            kSecReturnAttributes as String: true
+        ]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let items = result as? [[String: Any]] else { return [] }
+        let names = Set(items.compactMap { $0[kSecAttrService as String] as? String })
+            .filter { $0 == service || $0.hasPrefix(service + "-") }
+        // The default ~/.claude login first, so it keeps the main card.
+        return names.sorted { ($0 == service ? 0 : 1, $0) < ($1 == service ? 0 : 1, $1) }
+    }
+
+    private static func pathHash(_ path: String) -> String {
+        SHA256.hash(data: Data(path.utf8)).prefix(4).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func accountEmail(_ profile: URL) -> String? {
+        guard let data = try? Data(contentsOf: profile),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let account = json["oauthAccount"] as? [String: Any] else { return nil }
+        return CredentialParsing.nonempty(account["emailAddress"])
+    }
 
     /// Read-only lookup through /usr/bin/security, which Claude Code's item already trusts.
-    static func read() -> Data? {
+    private static func read(service: String) -> Data? {
         let process = Process()
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
